@@ -17,7 +17,7 @@ OFFLINE_TIMEOUT = 30
 st.set_page_config(page_title="Fish Tank Control", layout="wide")
 
 # =====================================================
-# SIMPLE AUTHENTICATION
+# AUTHENTICATION (Standard Password)
 # =====================================================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
@@ -25,8 +25,11 @@ if "logged_in" not in st.session_state:
 
 def load_config_data():
     if os.path.exists(CONFIG_FILE):
-        with open(CONFIG_FILE, "r") as f:
-            return json.load(f)
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                return json.load(f)
+        except:
+            pass
     return {"system_password": "admin"}
 
 
@@ -35,20 +38,15 @@ SYSTEM_PASSWORD = config_data.get("system_password", "admin123")
 
 if not st.session_state.logged_in:
     st.title("🔒 System Login")
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        pwd = st.text_input("Enter Password:", type="password")
-        if st.button("Login"):
-            if pwd == SYSTEM_PASSWORD:
-                st.session_state.logged_in = True
-                st.rerun()
-            else:
-                st.error("Incorrect password.")
-    st.stop()  # Stops the app here until logged in
+    pwd = st.text_input("Password:", type="password")
+    if st.button("Login"):
+        if pwd == SYSTEM_PASSWORD:
+            st.session_state.logged_in = True
+            st.rerun()
+        else:
+            st.error("Wrong password.")
+    st.stop()
 
-# =====================================================
-# MAIN APP (Only runs after login)
-# =====================================================
 with st.sidebar:
     if st.button("Log Out"):
         st.session_state.logged_in = False
@@ -56,17 +54,19 @@ with st.sidebar:
     st.divider()
 
 
+# =====================================================
+# CORE FUNCTIONS
+# =====================================================
 def get_vietnam_time():
     return datetime.now(timezone.utc) + timedelta(hours=7)
 
 
 def save_config(bridge_data):
-    """Saves settings while preserving the password."""
-    with open(CONFIG_FILE, "r") as f:
-        full_data = json.load(f)
+    # Load existing to preserve password
+    current_conf = load_config_data()
 
     times_str = [t.strftime("%H:%M") for t in bridge_data["feed_times"]]
-    full_data.update({
+    current_conf.update({
         "auto_feed_enabled": bridge_data["auto_feed_enabled"],
         "feed_times": times_str,
         "input_mode": bridge_data.get("input_mode", "Picker"),
@@ -75,7 +75,7 @@ def save_config(bridge_data):
     })
 
     with open(CONFIG_FILE, "w") as f:
-        json.dump(full_data, f)
+        json.dump(current_conf, f)
 
 
 def load_bridge_settings():
@@ -86,19 +86,14 @@ def load_bridge_settings():
         "triggered_today": [],
         "last_check_date": None,
     }
-    if os.path.exists(CONFIG_FILE):
-        try:
-            with open(CONFIG_FILE, "r") as f:
-                data = json.load(f)
-                if "auto_feed_enabled" in data:
-                    bridge["auto_feed_enabled"] = data["auto_feed_enabled"]
-                    bridge["input_mode"] = data.get("input_mode", "Picker")
-                    raw_times = data.get("feed_times", ["08:00"])
-                    bridge["feed_times"] = [datetime.strptime(t, "%H:%M").time() for t in raw_times]
-                    bridge["triggered_today"] = data.get("triggered_today", [])
-                    bridge["last_check_date"] = data.get("last_check_date", None)
-        except:
-            pass
+    data = load_config_data()
+    if "auto_feed_enabled" in data:
+        bridge["auto_feed_enabled"] = data["auto_feed_enabled"]
+        bridge["input_mode"] = data.get("input_mode", "Picker")
+        raw_times = data.get("feed_times", ["08:00"])
+        bridge["feed_times"] = [datetime.strptime(t, "%H:%M").time() for t in raw_times]
+        bridge["triggered_today"] = data.get("triggered_today", [])
+        bridge["last_check_date"] = data.get("last_check_date", None)
     return bridge
 
 
@@ -129,7 +124,8 @@ def on_message(client, userdata, msg):
 
 @st.cache_resource
 def mqtt_client():
-    client_id = f"FishSys-{int(time.time())}"
+    # Dynamic ID prevents session collision
+    client_id = f"WebClient-{int(time.time())}"
     c = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
     c.on_message = on_message
     c.connect(MQTT_BROKER, 1883, keepalive=60)
@@ -140,53 +136,83 @@ def mqtt_client():
 
 client = mqtt_client()
 
+
+# Helper to send commands properly (NO RETAIN to prevent ghost triggers)
+def send_command(payload):
+    client.publish(TOPIC_COMMAND, payload, qos=1, retain=False)
+
+
 # =====================================================
-# DASHBOARD UI
+# DASHBOARD
 # =====================================================
 st.title("🐠 Smart Fish Tank System")
 
 vn_now = get_vietnam_time()
 online = (time.time() - st.session_state.last_seen) < OFFLINE_TIMEOUT
 
+# Sidebar Info
 st.sidebar.markdown(f"### 🕒 {vn_now.strftime('%H:%M:%S')}")
 if online:
     st.sidebar.success("✅ SYSTEM ONLINE")
 else:
     st.sidebar.error("❌ SYSTEM OFFLINE")
 
+# Main Status
 st.metric("🍽 Feeder State", st.session_state.feeder_status)
 st.divider()
 
-st.subheader("🕹️ Manual Overrides")
+# Controls
+st.subheader("🕹️ Manual Controls")
 mc1, mc2 = st.columns(2)
 with mc1:
     if st.button("🚀 Pump ON", use_container_width=True, disabled=not online):
-        client.publish(TOPIC_COMMAND, "PUMP_ON")
+        send_command("PUMP_ON")
     if st.button("🛑 Pump OFF", use_container_width=True, disabled=not online):
-        client.publish(TOPIC_COMMAND, "PUMP_OFF")
+        send_command("PUMP_OFF")
 with mc2:
     if st.button("▶️ Feed ON", use_container_width=True, disabled=not online):
-        client.publish(TOPIC_COMMAND, "FEEDER_ON")
+        send_command("FEEDER_ON")
     if st.button("⏹ Feed OFF", use_container_width=True, disabled=not online):
-        client.publish(TOPIC_COMMAND, "FEEDER_OFF")
+        send_command("FEEDER_OFF")
 
 st.divider()
 
-st.subheader("⏰ Scheduled Feeding")
+# =====================================================
+# IMPROVED SCHEDULER
+# =====================================================
+st.subheader("⏰ Daily Schedule")
 col_cfg, col_times = st.columns([1, 2])
+
 with col_cfg:
     bridge["auto_feed_enabled"] = st.toggle("Enable Automation", value=bridge["auto_feed_enabled"])
-    num_feeds = st.number_input("Feeds per day", 1, 10, len(bridge["feed_times"]))
-    mode_selection = st.radio("Style:", ["Picker", "Text"], horizontal=True,
-                              index=0 if bridge["input_mode"] == "Picker" else 1)
-    bridge["input_mode"] = mode_selection
 
-    if st.button("🔄 Reset Daily Trigger"):
+    # Calculate Next Feed Time for display
+    next_feed_txt = "None"
+    min_diff = 99999
+    curr_minutes = vn_now.hour * 60 + vn_now.minute
+
+    if bridge["auto_feed_enabled"]:
+        for t in bridge["feed_times"]:
+            feed_minutes = t.hour * 60 + t.minute
+            diff = feed_minutes - curr_minutes
+            if diff > 0 and diff < min_diff:
+                min_diff = diff
+                next_feed_txt = t.strftime("%H:%M")
+
+        # If no more feeds today, show tomorrow's first
+        if min_diff == 99999 and len(bridge["feed_times"]) > 0:
+            next_feed_txt = f"{min(bridge['feed_times']).strftime('%H:%M')} (Tomorrow)"
+
+    st.info(f"📅 **Next Feed:** {next_feed_txt}")
+
+    if st.button("🔄 Reset Daily Logic"):
         bridge["triggered_today"] = []
         save_config(bridge)
-        st.success("Reset!")
+        st.success("Daily memory cleared!")
 
 with col_times:
+    num_feeds = st.number_input("Feeds per day", 1, 10, len(bridge["feed_times"]))
+
     if len(bridge["feed_times"]) > num_feeds:
         bridge["feed_times"] = bridge["feed_times"][:num_feeds]
         save_config(bridge)
@@ -198,34 +224,43 @@ with col_times:
             bridge["feed_times"].append(datetime.strptime("08:00", "%H:%M").time())
         current_t = bridge["feed_times"][i]
         with cols[i % 3]:
-            if bridge["input_mode"] == "Text":
-                t_str = st.text_input(f"#{i + 1}", value=current_t.strftime("%H:%M"), key=f"t_txt_{i}")
-                try:
-                    new_schedule.append(datetime.strptime(t_str, "%H:%M").time())
-                except:
-                    new_schedule.append(current_t)
-            else:
-                new_schedule.append(st.time_input(f"#{i + 1}", value=current_t, key=f"t_p_{i}"))
+            # Always use Picker for smoothness, it's less error prone than text
+            new_val = st.time_input(f"Slot #{i + 1}", value=current_t, key=f"t_p_{i}")
+            new_schedule.append(new_val)
 
     if new_schedule != bridge["feed_times"]:
         bridge["feed_times"] = new_schedule
         save_config(bridge)
 
-# Automation Logic
+# =====================================================
+# AUTOMATION LOGIC BRAIN
+# =====================================================
 if bridge["auto_feed_enabled"] and online:
     curr_str = vn_now.strftime("%H:%M")
     today_str = vn_now.date().isoformat()
+
+    # 1. Midnight Reset
     if bridge["last_check_date"] != today_str:
         bridge["triggered_today"] = []
         bridge["last_check_date"] = today_str
         save_config(bridge)
+
+    # 2. Check Triggers
     for t in bridge["feed_times"]:
         check_str = t.strftime("%H:%M")
-        if curr_str == check_str and check_str not in bridge["triggered_today"]:
-            bridge["triggered_today"].append(check_str)
-            save_config(bridge)
-            client.publish(TOPIC_COMMAND, "FEED_AUTO")
-            st.toast(f"🤖 Auto Feed: {check_str}")
+
+        # Logic: If time matches AND we haven't fed yet today
+        if curr_str == check_str:
+            if check_str not in bridge["triggered_today"]:
+                # EXECUTE
+                send_command("FEED_AUTO")
+
+                # MARK AS DONE
+                bridge["triggered_today"].append(check_str)
+                save_config(bridge)
+
+                # VISUAL NOTIFICATION
+                st.toast(f"🤖 Auto-Feeding Triggered at {check_str}!", icon="🍽")
 
 # Hidden Diagnostics
 with st.sidebar:
@@ -233,8 +268,7 @@ with st.sidebar:
     with st.expander("🛠 Diagnostics"):
         st.write(f"TDS: {st.session_state.sensor_value}")
         st.write(f"Pump: {st.session_state.pump_status}")
-        latency = int((time.time() - st.session_state.last_seen) * 1000)
-        st.code(f"Latency: {latency}ms")
+        st.write(f"Fed Today: {bridge['triggered_today']}")
 
 time.sleep(1)
 st.rerun()

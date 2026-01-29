@@ -13,12 +13,14 @@ Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 const int tdsPin  = 35;
 const int relayK1 = 26;   // Pump (ACTIVE LOW)
 const int relayK2 = 27;   // Feeder (ACTIVE LOW)
-const int statusLed = 2;  // Built-in LED for visual feedback
+const int statusLed = 2;  
 
-// ================= MQTT CONFIG =================
+// ================= MQTT CONFIG (MATCHING WEB APP) =================
 const char* mqtt_server   = "broker.hivemq.com";
-const char* topic_status  = "vju/dung_luong/fish_tank_99xx/status";
-const char* topic_command = "vju/dung_luong/fish_tank_99xx/command";
+
+// REMOVED "vju/" TO MATCH PYTHON CODE
+const char* topic_status  = "dung_luong/fish_tank_99xx/status"; 
+const char* topic_command = "dung_luong/fish_tank_99xx/command"; 
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -69,12 +71,16 @@ void sendUpdate() {
 
   StaticJsonDocument<200> doc;
   pumpStatus = (digitalRead(relayK1) == LOW) ? "ON" : "OFF";
-  feederStatus = (digitalRead(relayK2) == LOW) ? (feederAuto ? "AUTO" : "MANUAL") : "READY";
+  if (digitalRead(relayK2) == LOW) {
+    feederStatus = feederAuto ? "AUTO" : "MANUAL";
+  } else {
+    feederStatus = "READY";
+  }
 
   doc["sensor_value"]  = tdsPPM;
   doc["pump_status"]   = pumpStatus;
   doc["feeder_status"] = feederStatus;
-  doc["rssi"]          = WiFi.RSSI(); // Monitor signal strength
+  doc["rssi"]          = WiFi.RSSI();
 
   char buffer[200];
   serializeJson(doc, buffer);
@@ -82,7 +88,7 @@ void sendUpdate() {
 }
 
 void callback(char* topic, byte* payload, unsigned int length) {
-  digitalWrite(statusLed, HIGH); // Flash LED on command
+  digitalWrite(statusLed, HIGH); 
   String msg;
   for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
 
@@ -90,7 +96,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   else if (msg == "PUMP_OFF") digitalWrite(relayK1, HIGH);
   else if (msg == "FEEDER_ON") { digitalWrite(relayK2, LOW); feederManual = true; feederAuto = false; }
   else if (msg == "FEEDER_OFF") { digitalWrite(relayK2, HIGH); feederManual = false; feederAuto = false; }
-  else if (msg == "FEED_AUTO" && !feederAuto && !feederManual && (millis() - feederStartTime > 10000)) {
+  else if (msg == "FEED_AUTO" && !feederAuto && !feederManual && (millis() - feederStartTime > 2000)) {
     digitalWrite(relayK2, LOW);
     feederAuto = true;
     feederStartTime = millis();
@@ -102,7 +108,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
 }
 
 boolean reconnect() {
-  String clientId = "ESP32-VJU-" + String(random(0xffff), HEX);
+  // UNIQUE CLIENT ID to avoid conflicts
+  String clientId = "ESP32-Tank-" + String(random(0xffff), HEX);
   if (client.connect(clientId.c_str())) {
     client.subscribe(topic_command);
     sendUpdate();
@@ -121,12 +128,11 @@ void setup() {
   display.clearDisplay();
   display.setTextColor(WHITE);
   display.setCursor(0,10);
-  display.println("Connecting WiFi...");
+  display.println("System Starting...");
   display.display();
 
   WiFiManager wm;
-  // wm.resetSettings(); // Uncomment to reset WiFi
-  if (!wm.autoConnect("SmartFishCare_AP")) {
+  if (!wm.autoConnect("FishTank_Config_AP")) {
     ESP.restart();
   }
 
@@ -137,7 +143,6 @@ void setup() {
 
 // ================= MAIN LOOP =================
 void loop() {
-  // Non-blocking MQTT reconnection
   if (!client.connected()) {
     unsigned long now = millis();
     if (now - lastReconnectAttempt > 5000) {
@@ -150,41 +155,36 @@ void loop() {
     client.loop();
   }
 
-  // 1. High-speed sampling (10ms)
   if (millis() - lastSample >= 10) {
     lastSample = millis();
     readStableTDS(); 
   }
 
-  // 2. Scheduled reporting (1000ms)
   if (millis() - lastReport >= 1000) {
     lastReport = millis();
     sendUpdate(); 
   }
 
-  // 3. Independent Feeder Safety Logic
   if (feederAuto && (millis() - feederStartTime >= AUTO_FEED_DURATION)) {
     digitalWrite(relayK2, HIGH);
     feederAuto = false;
     sendUpdate();
   }
 
-  // 4. OLED Refresh
   if (millis() - lastOLED >= 500) {
     lastOLED = millis();
     display.clearDisplay();
     display.setTextSize(1);
     display.setCursor(0, 0);
-    display.println("SMART FISH CARE");
+    display.println("FISH TANK SYSTEM"); // Removed VJU branding
     display.drawLine(0, 12, 128, 12, WHITE);
     
     display.setCursor(0, 20);
     display.print("TDS:  "); display.print(tdsPPM); display.println(" ppm");
     display.print("Pump: "); display.println(pumpStatus);
-    display.print("Feed: "); display.println(feederStatus);
     
     display.setCursor(0, 55);
-    display.print(client.connected() ? "Cloud: OK" : "Cloud: RECONNECTING");
+    display.print(client.connected() ? "Online" : "Connecting...");
     display.display();
   }
 }
