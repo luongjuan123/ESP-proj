@@ -1,12 +1,14 @@
 {
+    "web": {
+        "client_id": "YOUR_GOOGLE_CLIENT_ID_HERE",
+        "client_secret": "YOUR_GOOGLE_CLIENT_SECRET_HERE",
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "redirect_uris": ["https://esp-proj-krdkcruesacrt24yfhpjij.streamlit.app/"]
+    },
     "auto_feed_enabled": false,
     "feed_times": ["08:00"],
     "input_mode": "Picker",
     "triggered_today": [],
-    "last_check_date": null,
-    "auth": {
-        "client_id": "YOUR_GOOGLE_CLIENT_ID_GOES_HERE",
-        "client_secret": "YOUR_GOOGLE_CLIENT_SECRET_GOES_HERE",
-        "redirect_uri": "http://localhost:8501"
-    }
+    "last_check_date": null
 }
