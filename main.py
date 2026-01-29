@@ -4,48 +4,55 @@ import json
 import time
 import os
 from datetime import datetime, timedelta, timezone
-from streamlit_google_auth import Authenticate
 
 # =====================================================
 # CONFIGURATION
 # =====================================================
 MQTT_BROKER = "broker.hivemq.com"
-TOPIC_STATUS = "vju/dung_luong/fish_tank_99xx/status"
-TOPIC_COMMAND = "vju/dung_luong/fish_tank_99xx/command"
+TOPIC_STATUS = "dung_luong/fish_tank_99xx/status"
+TOPIC_COMMAND = "dung_luong/fish_tank_99xx/command"
 CONFIG_FILE = "fish_config.json"
 OFFLINE_TIMEOUT = 30
 
-st.set_page_config(page_title="VJU Fish Tank", layout="wide")
+st.set_page_config(page_title="Fish Tank Control", layout="wide")
 
 # =====================================================
-# AUTHENTICATION
+# SIMPLE AUTHENTICATION
 # =====================================================
-if not os.path.exists(CONFIG_FILE):
-    st.error("Config file not found! Please create fish_config.json.")
-    st.stop()
+if "logged_in" not in st.session_state:
+    st.session_state.logged_in = False
 
-# Initialize Auth
-authenticator = Authenticate(
-    secret_credentials_path=CONFIG_FILE,
-    cookie_name='vju_fish_cookie',
-    cookie_key='random_secret_key_signature',
-    redirect_uri='http://localhost:8501',  # CHANGE THIS to your Cloud URL if deployed
-)
 
-# Check Login Status
-authenticator.check_authentification()
+def load_config_data():
+    if os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "r") as f:
+            return json.load(f)
+    return {"system_password": "admin"}
 
-if not st.session_state.get('connected'):
-    st.title("🔒 VJU Fish Tank Login")
-    authenticator.login()
-    st.stop()
+
+config_data = load_config_data()
+SYSTEM_PASSWORD = config_data.get("system_password", "admin123")
+
+if not st.session_state.logged_in:
+    st.title("🔒 System Login")
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        pwd = st.text_input("Enter Password:", type="password")
+        if st.button("Login"):
+            if pwd == SYSTEM_PASSWORD:
+                st.session_state.logged_in = True
+                st.rerun()
+            else:
+                st.error("Incorrect password.")
+    st.stop()  # Stops the app here until logged in
 
 # =====================================================
-# MAIN APP (LOGGED IN)
+# MAIN APP (Only runs after login)
 # =====================================================
 with st.sidebar:
     if st.button("Log Out"):
-        authenticator.logout()
+        st.session_state.logged_in = False
+        st.rerun()
     st.divider()
 
 
@@ -54,12 +61,10 @@ def get_vietnam_time():
 
 
 def save_config(bridge_data):
-    """Saves automation settings without deleting Auth keys."""
-    # 1. Read full existing config to preserve Google Keys
+    """Saves settings while preserving the password."""
     with open(CONFIG_FILE, "r") as f:
         full_data = json.load(f)
 
-    # 2. Update only fish settings
     times_str = [t.strftime("%H:%M") for t in bridge_data["feed_times"]]
     full_data.update({
         "auto_feed_enabled": bridge_data["auto_feed_enabled"],
@@ -69,13 +74,11 @@ def save_config(bridge_data):
         "last_check_date": bridge_data["last_check_date"]
     })
 
-    # 3. Write back
     with open(CONFIG_FILE, "w") as f:
         json.dump(full_data, f)
 
 
 def load_bridge_settings():
-    """Loads only the fish tank settings from the config file."""
     bridge = {
         "auto_feed_enabled": False,
         "feed_times": [datetime.strptime("08:00", "%H:%M").time()],
@@ -87,7 +90,6 @@ def load_bridge_settings():
         try:
             with open(CONFIG_FILE, "r") as f:
                 data = json.load(f)
-                # Only load fish keys, ignore "web" (Auth) keys
                 if "auto_feed_enabled" in data:
                     bridge["auto_feed_enabled"] = data["auto_feed_enabled"]
                     bridge["input_mode"] = data.get("input_mode", "Picker")
@@ -127,7 +129,7 @@ def on_message(client, userdata, msg):
 
 @st.cache_resource
 def mqtt_client():
-    client_id = f"VJU-AUTH-{int(time.time())}"
+    client_id = f"FishSys-{int(time.time())}"
     c = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
     c.on_message = on_message
     c.connect(MQTT_BROKER, 1883, keepalive=60)
@@ -141,16 +143,16 @@ client = mqtt_client()
 # =====================================================
 # DASHBOARD UI
 # =====================================================
-st.title("🐠 VJU Smart Fish Tank")
+st.title("🐠 Smart Fish Tank System")
 
 vn_now = get_vietnam_time()
 online = (time.time() - st.session_state.last_seen) < OFFLINE_TIMEOUT
 
 st.sidebar.markdown(f"### 🕒 {vn_now.strftime('%H:%M:%S')}")
 if online:
-    st.sidebar.success("✅ ONLINE")
+    st.sidebar.success("✅ SYSTEM ONLINE")
 else:
-    st.sidebar.error("❌ OFFLINE")
+    st.sidebar.error("❌ SYSTEM OFFLINE")
 
 st.metric("🍽 Feeder State", st.session_state.feeder_status)
 st.divider()
@@ -179,7 +181,6 @@ with col_cfg:
                               index=0 if bridge["input_mode"] == "Picker" else 1)
     bridge["input_mode"] = mode_selection
 
-    # Manual Reset Button for Auto-Feeder Debugging
     if st.button("🔄 Reset Daily Trigger"):
         bridge["triggered_today"] = []
         save_config(bridge)

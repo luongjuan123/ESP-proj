@@ -1,11 +1,5 @@
 {
-    "web": {
-        "client_id": "YOUR_GOOGLE_CLIENT_ID_HERE",
-        "client_secret": "YOUR_GOOGLE_CLIENT_SECRET_HERE",
-        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-        "token_uri": "https://oauth2.googleapis.com/token",
-        "redirect_uris": ["https://esp-proj-krdkcruesacrt24yfhpjij.streamlit.app/"]
-    },
+    "system_password": "admin123",
     "auto_feed_enabled": false,
     "feed_times": ["08:00"],
     "input_mode": "Picker",
